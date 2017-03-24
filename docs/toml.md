@@ -269,6 +269,25 @@ Supported filters:
 # attempts = 3
 ```
 
+## Health check configuration
+```toml
+# Enable custom health check options.
+#
+# Optional
+#
+[healthcheck]
+
+# Set the default health check interval. Will only be effective if health check
+# paths are defined. Given provider-specific support, the value may be
+# overridden on a per-backend basis.
+# Accepts any value that [time.ParseDuration](https://golang.org/pkg/time/#ParseDuration) supports.
+#
+# Optional
+# Default: "30s"
+#
+# interval = "30s"
+```
+
 ## ACME (Let's Encrypt) configuration
 
 ```toml
