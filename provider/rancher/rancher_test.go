@@ -287,6 +287,48 @@ func TestRancherGetFrontendRule(t *testing.T) {
 	}
 }
 
+func TestRancherGetFrontendRuleWithTemplate(t *testing.T) {
+	services := []struct {
+		provider *Provider
+		service  rancherData
+		expected string
+	}{
+		{
+			provider: &Provider{
+				Domain: "rancher.localhost",
+				FrontendHostRuleTemplate: "{{.Environment}}-{{.Service}}-{{.Project}}.{{.Domain}}",
+			},
+			service: rancherData{
+				Name: "foo/bar",
+				Environment: "foo",
+				Service: "bar",
+				Project: "env",
+			},
+			expected: "Host:foo-bar-env.rancher.localhost",
+		},
+		{
+			provider: &Provider{
+				Domain: "rancher.localhost",
+				FrontendHostRuleTemplate: "{{.Service}}-{{.Environment}}-{{.Project}}.{{.Domain}}",
+			},
+			service: rancherData{
+				Name: "foo/bar",
+				Environment: "foo",
+				Service: "bar",
+				Project: "env",
+			},
+			expected: "Host:bar-foo-env.rancher.localhost",
+		},
+	}
+
+	for _, e := range services {
+		actual := e.provider.getFrontendRule(e.service)
+		if actual != e.expected {
+			t.Fatalf("expected %q, got %q", e.expected, actual)
+		}
+	}
+}
+
 func TestRancherGetBackend(t *testing.T) {
 	provider := &Provider{
 		Domain: "rancher.localhost",

@@ -19,6 +19,7 @@ import (
 	"github.com/containous/traefik/safe"
 	"github.com/containous/traefik/types"
 	rancher "github.com/rancher/go-rancher/client"
+	"bytes"
 )
 
 var (
@@ -37,14 +38,25 @@ type Provider struct {
 	Domain                    string `description:"Default domain used"`
 	RefreshSeconds            int    `description:"Polling interval (in seconds)"`
 	EnableServiceHealthFilter bool   `description:"Filter services with unhealthy states and health states."`
+	FrontendHostRuleTemplate  string `description:"Host frontend rule template."`
 }
 
 type rancherData struct {
-	Name       string
-	Labels     map[string]string // List of labels set to container or service
-	Containers []string
-	Health     string
-	State      string
+	Name        string
+	Labels      map[string]string // List of labels set to container or service
+	Containers  []string
+	Health      string
+	State       string
+	Service     string
+	Environment string
+	Project     string
+}
+
+type frontendHostRuleTemplateData struct {
+	Service     string
+	Environment string
+	Project     string
+	Domain      string
 }
 
 func init() {
@@ -83,6 +95,22 @@ func (p *Provider) getFrontendRule(service rancherData) string {
 	if label, err := getServiceLabel(service, "traefik.frontend.rule"); err == nil {
 		return label
 	}
+
+	if p.FrontendHostRuleTemplate != "" {
+		tmpl, err := template.New("FrontendHostRule").Parse(p.FrontendHostRuleTemplate)
+		if err != nil {
+			panic(err)
+		}
+		buf := new(bytes.Buffer)
+		tmpl.Execute(buf, frontendHostRuleTemplateData{
+			Service:     service.Service,
+			Environment: service.Environment,
+			Project:     service.Project,
+			Domain:      p.Domain,
+		})
+		return "Host:" + buf.String()
+	}
+
 	return "Host:" + strings.ToLower(strings.Replace(service.Name, "/", ".", -1)) + "." + p.Domain
 }
 
@@ -246,11 +274,12 @@ func (p *Provider) Provide(configurationChan chan<- types.ConfigMessage, pool *s
 			}
 
 			ctx := context.Background()
+			var projects = listRancherProjects(rancherClient)
 			var environments = listRancherEnvironments(rancherClient)
 			var services = listRancherServices(rancherClient)
 			var container = listRancherContainer(rancherClient)
 
-			var rancherData = parseRancherData(environments, services, container)
+			var rancherData = parseRancherData(projects, environments, services, container)
 
 			configuration := p.loadRancherConfig(rancherData)
 			configurationChan <- types.ConfigMessage{
@@ -267,11 +296,12 @@ func (p *Provider) Provide(configurationChan chan<- types.ConfigMessage, pool *s
 						case <-ticker.C:
 
 							log.Debugf("Refreshing new Data from Provider API")
+							var projects = listRancherProjects(rancherClient)
 							var environments = listRancherEnvironments(rancherClient)
 							var services = listRancherServices(rancherClient)
 							var container = listRancherContainer(rancherClient)
 
-							rancherData := parseRancherData(environments, services, container)
+							rancherData := parseRancherData(projects, environments, services, container)
 
 							configuration := p.loadRancherConfig(rancherData)
 							if configuration != nil {
@@ -301,6 +331,23 @@ func (p *Provider) Provide(configurationChan chan<- types.ConfigMessage, pool *s
 	})
 
 	return nil
+}
+
+func listRancherProjects(client *rancher.RancherClient) []*rancher.Project {
+
+	var projectList = []*rancher.Project{}
+
+	projects, err := client.Project.List(withoutPagination)
+
+	if err != nil {
+		log.Errorf("Cannot get Provider Environments %+v", err)
+	}
+
+	for k := range projects.Data {
+		projectList = append(projectList, &projects.Data[k])
+	}
+
+	return projectList
 }
 
 func listRancherEnvironments(client *rancher.RancherClient) []*rancher.Environment {
@@ -370,38 +417,47 @@ func listRancherContainer(client *rancher.RancherClient) []*rancher.Container {
 	return containerList
 }
 
-func parseRancherData(environments []*rancher.Environment, services []*rancher.Service, containers []*rancher.Container) []rancherData {
+func parseRancherData(projects []*rancher.Project, environments []*rancher.Environment, services []*rancher.Service, containers []*rancher.Container) []rancherData {
 	var rancherDataList []rancherData
 
-	for _, environment := range environments {
+	for _, project := range projects {
 
-		for _, service := range services {
-			if service.EnvironmentId != environment.Id {
+		for _, environment := range environments {
+			if environment.AccountId != project.Id {
 				continue
 			}
 
-			rancherData := rancherData{
-				Name:       environment.Name + "/" + service.Name,
-				Health:     service.HealthState,
-				State:      service.State,
-				Labels:     make(map[string]string),
-				Containers: []string{},
-			}
-
-			if service.LaunchConfig == nil || service.LaunchConfig.Labels == nil {
-				log.Warnf("Rancher Service Labels are missing. Environment: %s, service: %s", environment.Name, service.Name)
-			} else {
-				for key, value := range service.LaunchConfig.Labels {
-					rancherData.Labels[key] = value.(string)
+			for _, service := range services {
+				if service.EnvironmentId != environment.Id {
+					continue
 				}
-			}
 
-			for _, container := range containers {
-				if container.Labels["io.rancher.stack_service.name"] == rancherData.Name && containerFilter(container) {
-					rancherData.Containers = append(rancherData.Containers, container.PrimaryIpAddress)
+				rancherData := rancherData{
+					Name:        environment.Name + "/" + service.Name,
+					Health:      service.HealthState,
+					State:       service.State,
+					Labels:      make(map[string]string),
+					Containers:  []string{},
+					Service:     service.Name,
+					Environment: environment.Name,
+					Project:     project.Name,
 				}
+
+				if service.LaunchConfig == nil || service.LaunchConfig.Labels == nil {
+					log.Warnf("Rancher Service Labels are missing. Environment: %s, service: %s", environment.Name, service.Name)
+				} else {
+					for key, value := range service.LaunchConfig.Labels {
+						rancherData.Labels[key] = value.(string)
+					}
+				}
+
+				for _, container := range containers {
+					if container.Labels["io.rancher.stack_service.name"] == rancherData.Name && containerFilter(container) {
+						rancherData.Containers = append(rancherData.Containers, container.PrimaryIpAddress)
+					}
+				}
+				rancherDataList = append(rancherDataList, rancherData)
 			}
-			rancherDataList = append(rancherDataList, rancherData)
 		}
 	}
 

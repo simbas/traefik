@@ -1670,6 +1670,11 @@ EnableServiceHealthFilter = false
 # Required
 # SecretKey = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
+# FrontendHostRuleTemplate to use when creating the frontend host rule
+#
+# Optional
+# FrontendHostRuleTemplate = "{{.Service}}-{{.Environment}}-{{.Project}}.{{.Domain}}"
+
 ```
 
 As traefik needs access to the rancher API, you need to set the `endpoint`, `accesskey` and `secretkey` parameters. 
